@@ -261,8 +261,8 @@
         }
 
 
-        // --- MAIN ORCHESTRATOR ---
-// --- MAIN ORCHESTRATOR ---
+        // --- MAIN --
+
         async function fetchAllSites() {
             const wrapper = document.getElementById('charts-wrapper');
 
@@ -285,7 +285,7 @@
                 try {
                     const interpolator = await getRatingCurveInterpolator(siteNo);
 
-                    // --- A. FETCH USGS DATA ---
+                    // --- FETCH USGS DATA ---
                     let isDischarge = true;
 
                     // Fetch both parameters
@@ -330,7 +330,7 @@
                         usgsPlotData.push({ x: currentTime, y: val });
                     }
 
-                    // --- B. FETCH NWM FORECAST ---
+                    // --- FETCH NWM FORECAST ---
                     let nwmPlotData = [];
                     let nwmPlotDataMedium = [];
                     let nwmErrorMsg = null;
@@ -374,7 +374,7 @@
                         }
                     }
 
-                    // --- C. RENDER ---
+                   
                     const chartDiv = document.createElement('div');
                     chartDiv.className = 'chart-container';
                     const canvasWrapper = document.createElement('div');
