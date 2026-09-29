@@ -77,6 +77,7 @@
         .line-obs { border-top-style: solid; border-top-color: rgba(0, 51, 153, 1); }
         .line-short { border-top-style: dashed; border-top-color: rgba(255, 102, 0, 1); }
         .line-med { border-top-style: dotted; border-top-color: rgba(80, 10, 0, 1); }
+        .line-rfc { border-top-style: groove; border-top-color: rgba(153, 0, 204, 1); }
 
         /* Chart Grid */
         #charts-wrapper {
@@ -141,6 +142,7 @@
     <!-- UNIFIED GLOBAL LEGEND -->
     <div id="custom-legend">
         <div class="legend-item"><div class="legend-line line-obs"></div> Observed</div>
+        <div class="legend-item"><div class="legend-line line-rfc"></div> RFC Forecast</div>
         <div class="legend-item nwm-legend"><div class="legend-line line-short"></div> NWM Forecast (Short Range)</div>
         <div class="legend-item nwm-legend"><div class="legend-line line-med"></div> NWM Forecast (Medium Range Mean)</div>
     </div>
@@ -267,7 +269,7 @@
 
             if (!sitesParam || siteNumbers.length === 0) {
                 siteNumbers = ['01570500', '01422747'];
-                if(!sitesParam) {
+                if (!sitesParam) {
                     const msg = document.createElement('p');
                     msg.style.textAlign = 'center';
                     msg.style.gridColumn = '1 / -1';
@@ -324,91 +326,128 @@
                         if (i > 0) {
                             const prevTime = new Date(activeValues[i - 1].dateTime);
                             const diffMins = (currentTime - prevTime) / (1000 * 60);
-                            if (diffMins > 60) usgsPlotData.push({ x: new Date(prevTime.getTime() + 60000), y: null });
+                            if (diffMins > 60) usgsPlotData.push({x: new Date(prevTime.getTime() + 60000), y: null});
                         }
-                        usgsPlotData.push({ x: currentTime, y: val });
+                        usgsPlotData.push({x: currentTime, y: val});
                     }
 
-                    // --- FETCH NWM FORECAST ---
+                    // --- FETCH NWM & RFC FORECASTS ---
                     let nwmPlotData = [];
                     let nwmPlotDataMedium = [];
+                    let rfcPlotData = []; // NEW: Array for the official forecast
                     let nwmErrorMsg = null;
 
-                    // ONLY fetch and plot NWM if we are plotting Discharge
-                    if (isDischarge) {
-                        try {
-                            const reachId = await getReachIdFromUSGS(siteNo);
-                            if (reachId) {
-                                const forecastResponse = await getForecastForReach(reachId);
+                    try {
+                        // Unpack the helper we updated in the previous step
+                        const {reachId, hasOfficialForecast} = await getGaugeInfoFromUSGS(siteNo);
 
-                                if (forecastResponse && forecastResponse.length > 0) {
-                                    const cmsToCfs = 35.3147;
+                        // 1. FETCH RFC FORECAST (Works for both Stage and Discharge)
+                        if (hasOfficialForecast) {
+                        const rfcResponse = await fetch(`${NWPS_API_BASE}/gauges/${siteNo}/stageflow/forecast`);
+                        if (rfcResponse.ok) {
+                            const rfcJson = await rfcResponse.json();
+                            if (rfcJson.data && Array.isArray(rfcJson.data)) {
+                                rfcPlotData = rfcJson.data.map(pt => {
+                                    let val;
 
-                                    const shortRangeData = forecastResponse.find(f => f.configuration === "short_range");
-                                    if (shortRangeData && shortRangeData.forecast && shortRangeData.forecast[0].timeseries) {
-                                        nwmPlotData = shortRangeData.forecast[0].timeseries.map(pt => ({
-                                            x: new Date(pt.valid_datetime),
-                                            y: pt.value * cmsToCfs
-                                        }));
+                                    if (isDischarge) {
+                                        // Get flow (usually 'secondary' in NWPS, fallback to 'flow')
+                                        let flowVal = pt.secondary !== undefined ? pt.secondary : pt.flow;
+                                        if (flowVal !== undefined && flowVal !== null) {
+                                            // NWPS reports flow in kcfs. Multiply by 1000 to get cfs!
+                                            val = flowVal * 1000;
+                                        }
                                     } else {
-                                        nwmErrorMsg = "No short range forecast available.";
+                                        // Get stage (usually 'primary' in NWPS, fallback to 'stage')
+                                        val = pt.primary !== undefined ? pt.primary : pt.stage;
                                     }
 
-                                    const mediumRangeData = forecastResponse.find(f => f.configuration === "medium_range_mean");
-                                    if (mediumRangeData && mediumRangeData.forecast && mediumRangeData.forecast[0].timeseries) {
-                                        nwmPlotDataMedium = mediumRangeData.forecast[0].timeseries.map(pt => ({
-                                            x: new Date(pt.valid_datetime),
-                                            y: pt.value * cmsToCfs
-                                        }));
+                                    return { x: new Date(pt.validTime), y: val };
+                                }).filter(pt => pt.y !== undefined && pt.y !== null);
+                            }
+                        }
+}
+                        // ONLY fetch and plot NWM if we are plotting Discharge
+                        if (isDischarge) {
+                            try {
+                                const reachId = await getReachIdFromUSGS(siteNo);
+                                if (reachId) {
+                                    const forecastResponse = await getForecastForReach(reachId);
+
+                                    if (forecastResponse && forecastResponse.length > 0) {
+                                        const cmsToCfs = 35.3147;
+
+                                        const shortRangeData = forecastResponse.find(f => f.configuration === "short_range");
+                                        if (shortRangeData && shortRangeData.forecast && shortRangeData.forecast[0].timeseries) {
+                                            nwmPlotData = shortRangeData.forecast[0].timeseries.map(pt => ({
+                                                x: new Date(pt.valid_datetime),
+                                                y: pt.value * cmsToCfs
+                                            }));
+                                        } else {
+                                            nwmErrorMsg = "No short range forecast available.";
+                                        }
+
+                                        const mediumRangeData = forecastResponse.find(f => f.configuration === "medium_range_mean");
+                                        if (mediumRangeData && mediumRangeData.forecast && mediumRangeData.forecast[0].timeseries) {
+                                            nwmPlotDataMedium = mediumRangeData.forecast[0].timeseries.map(pt => ({
+                                                x: new Date(pt.valid_datetime),
+                                                y: pt.value * cmsToCfs
+                                            }));
+                                        }
+                                    } else {
+                                        nwmErrorMsg = "No forecast data returned from API.";
                                     }
                                 } else {
-                                     nwmErrorMsg = "No forecast data returned from API.";
+                                    nwmErrorMsg = `No NWM reach mapping found.`;
                                 }
-                            } else {
-                                nwmErrorMsg = `No NWM reach mapping found.`;
+                            } catch (nwmError) {
+                                console.warn(`NWM Fetch failed for ${siteNo}:`, nwmError);
+                                nwmErrorMsg = "Failed to load NWM forecast data.";
                             }
-                        } catch (nwmError) {
-                            console.warn(`NWM Fetch failed for ${siteNo}:`, nwmError);
-                            nwmErrorMsg = "Failed to load NWM forecast data.";
                         }
+
+
+                        const chartDiv = document.createElement('div');
+                        chartDiv.className = 'chart-container';
+                        const canvasWrapper = document.createElement('div');
+                        canvasWrapper.className = 'canvas-wrapper';
+                        const canvas = document.createElement('canvas');
+                        canvasWrapper.appendChild(canvas);
+                        chartDiv.appendChild(canvasWrapper);
+
+                        if (isDischarge && nwmPlotData.length === 0 && nwmPlotDataMedium.length === 0 && nwmErrorMsg) {
+                            const warningDiv = document.createElement('div');
+                            warningDiv.className = 'nwm-warning';
+                            warningDiv.textContent = nwmErrorMsg;
+                            chartDiv.appendChild(warningDiv);
+                        }
+
+                        wrapper.appendChild(chartDiv);
+
+                        renderChart(canvas, usgsPlotData, nwmPlotData, nwmPlotDataMedium, rfcPlotData, dynamicSiteName, siteNo, isDischarge, interpolator);
+
+                    } catch (nwmError) {
+                                console.warn(`NWM Fetch failed for ${siteNo}:`, nwmError);
+                                nwmErrorMsg = "Failed to load forecast data.";
                     }
-
-                   
-                    const chartDiv = document.createElement('div');
-                    chartDiv.className = 'chart-container';
-                    const canvasWrapper = document.createElement('div');
-                    canvasWrapper.className = 'canvas-wrapper';
-                    const canvas = document.createElement('canvas');
-                    canvasWrapper.appendChild(canvas);
-                    chartDiv.appendChild(canvasWrapper);
-
-                    if (isDischarge && nwmPlotData.length === 0 && nwmPlotDataMedium.length === 0 && nwmErrorMsg) {
-                        const warningDiv = document.createElement('div');
-                        warningDiv.className = 'nwm-warning';
-                        warningDiv.textContent = nwmErrorMsg;
-                        chartDiv.appendChild(warningDiv);
-                    }
-
-                    wrapper.appendChild(chartDiv);
-
-                    renderChart(canvas, usgsPlotData, nwmPlotData, nwmPlotDataMedium, dynamicSiteName, siteNo, isDischarge, interpolator);
-
                 } catch (error) {
                     console.error("Error processing site " + siteNo, error);
                     const errDiv = document.createElement('div');
                     errDiv.innerHTML = `<p style="color:red; font-weight:bold; text-align:center;">Error loading ${siteNo}: ${error.message}</p>`;
                     wrapper.appendChild(errDiv);
                 }
+
             }
         }
 
 
 // --- CHART RENDERING ---
-        function renderChart(canvas, usgsData, nwmData, nwmDataMed, siteName, siteNo, isDischarge, interpolator) {
+       function renderChart(canvas, usgsData, nwmData, nwmDataMed, rfcData, siteName, siteNo, isDischarge, interpolator) {
             const ctx = canvas.getContext('2d');
             const usgsColor = isDischarge ? 'rgba(0, 51, 153, 1)' : 'rgba(0, 153, 102, 1)';
             const nwmColor = 'rgba(255, 102, 0, 1)';
             const nwmColorMed = 'rgba(80, 10, 0, 1)';
+            const rfcColor = 'rgba(153, 0, 204, 1)'; // Purple
 
             const datasets = [
                 {
@@ -420,9 +459,19 @@
                     pointRadius: 0,
                     tension: 0.0,
                     fill: false
-                }
-            ];
-
+                } ];
+            if (rfcData && rfcData.length > 0) {
+                datasets.push({
+                    label: 'Official RFC Forecast',
+                    data: rfcData,
+                    yAxisID: 'y',
+                    borderColor: rfcColor,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.0,
+                    fill: false
+                });
+            }
             if (nwmData && nwmData.length > 0) {
                 datasets.push({
                     label: 'NWM Forecast (Short Range)',
@@ -542,13 +591,30 @@
         }
 
         // --- NWM HELPER FUNCTIONS ---
-        async function getReachIdFromUSGS(usgsId) {
+        async function getGaugeInfoFromUSGS(usgsId) {
             const response = await fetch(`${NWPS_API_BASE}/gauges/${usgsId}`);
-            if (response.status === 404) return null;
+            if (response.status === 404) return { reachId: null, hasOfficialForecast: false };
             if (!response.ok) throw new Error("NWPS Gauges API Error");
 
             const data = await response.json();
-            return data.reachId || null;
+
+            let hasOfficialForecast = false;
+
+            // Check the NWPS stageflow/forecast endpoint to confirm if an official RFC forecast exists
+            try {
+                const forecastCheck = await fetch(`${NWPS_API_BASE}/gauges/${usgsId}/stageflow/forecast`);
+                // If the endpoint returns a 200 OK, an official forecast is available
+                if (forecastCheck.ok) {
+                    hasOfficialForecast = true;
+                }
+            } catch (error) {
+                console.warn(`Could not check official forecast for ${usgsId}:`, error);
+            }
+
+            return {
+                reachId: data.reachId || null,
+                hasOfficialForecast
+            };
         }
 
         async function getForecastForReach(reachId) {
